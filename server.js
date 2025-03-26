@@ -5,6 +5,7 @@ const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
 const dotenv = require('dotenv');
+const { parse } = require('csv-parse/sync');
 
 // Load environment variables
 dotenv.config();
@@ -37,29 +38,31 @@ app.post('/api/upload', upload.single('file'), (req, res) => {
   }
 
   try {
-    const results = [];
+    console.log('Processing uploaded file...');
     const fileContent = req.file.buffer.toString();
     
     // Process the CSV data from memory
-    require('csv-parse/lib/sync')(fileContent, {
+    const results = parse(fileContent, {
       columns: true,
       skip_empty_lines: true
-    }).forEach(row => {
-      results.push(row);
     });
 
+    console.log(`Parsed ${results.length} rows from CSV`);
+    
     // Process the results
     const processedData = processCSVData(results);
+    console.log('Data processed successfully');
     
     res.json({ message: 'File processed successfully', data: processedData });
   } catch (error) {
     console.error('Error processing file:', error);
-    res.status(500).json({ error: 'Error processing file' });
+    res.status(500).json({ error: 'Error processing file: ' + error.message });
   }
 });
 
 // Helper function to process CSV data
 function processCSVData(data) {
+  console.log('Processing CSV data...');
   const members = data.map(row => {
     // Convert date strings to Date objects
     const joinDate = new Date(row['Join Date'] || null);
@@ -108,7 +111,7 @@ function processCSVData(data) {
       totalMembers,
       activeMembers,
       totalEngagement,
-      engagementRate: (activeMembers / totalMembers * 100).toFixed(1)
+      engagementRate: totalMembers > 0 ? (activeMembers / totalMembers * 100).toFixed(1) : '0.0'
     },
     categoryDistribution
   };
