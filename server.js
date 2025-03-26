@@ -1,58 +1,161 @@
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const csv = require('csv-parser');
 const fs = require('fs');
-const path = require('path');
 const multer = require('multer');
+const path = require('path');
+const dotenv = require('dotenv');
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
-const dataDir = path.join(__dirname, 'data');
-const csvPath = path.join(dataDir, 'latest.csv');
 
-// Create data directory if it doesn't exist
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir);
-}
-
-// Configure multer for file upload
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, dataDir);
-  },
-  filename: (req, file, cb) => {
-    cb(null, 'latest.csv');
-  }
-});
-
-const upload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only CSV files are allowed'));
-    }
-  }
-});
-
-// Middleware
-app.use(express.json());
-
-// Add CORS configuration
+// CORS configuration
 app.use(cors({
-  origin: '*', // In production, replace with your frontend URL
+  origin: ['https://my-web-app-dun-iota.vercel.app', 'http://localhost:3002'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type']
 }));
 
-// Add logging middleware
+// Configure multer for file upload
+const storage = multer.memoryStorage(); // Use memory storage instead of disk
+const upload = multer({ storage: storage });
+
+app.use(express.json());
+
+// Logging middleware
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
   next();
+});
+
+// File upload endpoint
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  try {
+    const results = [];
+    const fileContent = req.file.buffer.toString();
+    
+    // Process the CSV data from memory
+    require('csv-parse/lib/sync')(fileContent, {
+      columns: true,
+      skip_empty_lines: true
+    }).forEach(row => {
+      results.push(row);
+    });
+
+    // Process the results
+    const processedData = processCSVData(results);
+    
+    res.json({ message: 'File processed successfully', data: processedData });
+  } catch (error) {
+    console.error('Error processing file:', error);
+    res.status(500).json({ error: 'Error processing file' });
+  }
+});
+
+// Helper function to process CSV data
+function processCSVData(data) {
+  const members = data.map(row => {
+    // Convert date strings to Date objects
+    const joinDate = new Date(row['Join Date'] || null);
+    const lastVisit = new Date(row['Last Visit'] || null);
+
+    return {
+      name: row['Name'] || 'Unknown',
+      role: row['Role'] || 'Member',
+      joinDate: isNaN(joinDate.getTime()) ? null : joinDate.toISOString().split('T')[0],
+      lastVisit: isNaN(lastVisit.getTime()) ? null : lastVisit.toISOString().split('T')[0],
+      visits: parseInt(row['Visits']) || 0,
+      posts: parseInt(row['Posts']) || 0,
+      comments: parseInt(row['Comments']) || 0,
+      reactions: parseInt(row['Reactions']) || 0
+    };
+  });
+
+  // Calculate metrics
+  const totalMembers = members.length;
+  const activeMembers = members.filter(m => {
+    const lastVisit = m.lastVisit ? new Date(m.lastVisit) : null;
+    return lastVisit && (new Date() - lastVisit) < 30 * 24 * 60 * 60 * 1000;
+  }).length;
+
+  const totalEngagement = members.reduce((sum, m) => 
+    sum + m.visits + m.posts + m.comments + m.reactions, 0);
+
+  // Calculate health scores and categories
+  members.forEach(member => {
+    const score = calculateHealthScore(member);
+    member.healthScore = score;
+    member.category = getHealthCategory(score);
+  });
+
+  // Get category distribution
+  const categoryDistribution = {
+    Advocate: members.filter(m => m.category === 'Advocate').length,
+    'All Star': members.filter(m => m.category === 'All Star').length,
+    Average: members.filter(m => m.category === 'Average').length,
+    'At Risk': members.filter(m => m.category === 'At Risk').length
+  };
+
+  return {
+    members,
+    keyMetrics: {
+      totalMembers,
+      activeMembers,
+      totalEngagement,
+      engagementRate: (activeMembers / totalMembers * 100).toFixed(1)
+    },
+    categoryDistribution
+  };
+}
+
+function calculateHealthScore(member) {
+  const now = new Date();
+  const lastVisit = member.lastVisit ? new Date(member.lastVisit) : null;
+  const daysSinceLastVisit = lastVisit 
+    ? Math.floor((now - lastVisit) / (1000 * 60 * 60 * 24))
+    : 365;
+
+  const visitScore = Math.max(0, 100 - (daysSinceLastVisit * 2));
+  const engagementScore = Math.min(100, (
+    (member.visits * 2) +
+    (member.posts * 10) +
+    (member.comments * 5) +
+    (member.reactions * 3)
+  ) / 10);
+
+  return Math.round((visitScore + engagementScore) / 2);
+}
+
+function getHealthCategory(score) {
+  if (score >= 80) return 'Advocate';
+  if (score >= 60) return 'All Star';
+  if (score >= 40) return 'Average';
+  return 'At Risk';
+}
+
+// Dashboard data endpoint
+app.get('/api/dashboard-data', (req, res) => {
+  res.json({
+    members: [],
+    keyMetrics: {
+      totalMembers: 0,
+      activeMembers: 0,
+      totalEngagement: 0,
+      engagementRate: '0.0'
+    },
+    categoryDistribution: {
+      Advocate: 0,
+      'All Star': 0,
+      Average: 0,
+      'At Risk': 0
+    }
+  });
 });
 
 // Calculate member scores
@@ -148,20 +251,6 @@ function parseDate(dateStr) {
 }
 
 // Routes
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-    
-    console.log('File uploaded successfully:', req.file.originalname);
-    res.json({ message: 'File uploaded successfully' });
-  } catch (error) {
-    console.error('Error uploading file:', error);
-    res.status(500).json({ error: 'Failed to upload file', details: error.message });
-  }
-});
-
 app.get('/api/test', (req, res) => {
   console.log('Test endpoint called');
   res.json({ message: 'Backend is working!' });
@@ -169,33 +258,39 @@ app.get('/api/test', (req, res) => {
 
 app.get('/api/dashboard-data', async (req, res) => {
   console.log('Dashboard data endpoint called');
-  console.log('Looking for CSV file at:', csvPath);
-
-  if (!fs.existsSync(csvPath)) {
-    console.log('CSV file not found');
-    return res.status(404).json({ error: 'No data available. Please upload a CSV file.' });
-  }
-
-  console.log('CSV file found, starting to read...');
-  const results = [];
-  const keyMetrics = {
-    totalMembers: 0,
-    newMembers: 0,
-    atRiskMembers: 0,
-    churnRate: 0
-  };
-
-  const categoryDistribution = {
-    Advocate: 0,
-    'All Star': 0,
-    Average: 0,
-    'At Risk': 0
-  };
-
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
   try {
+    const results = [];
+    const keyMetrics = {
+      totalMembers: 0,
+      newMembers: 0,
+      atRiskMembers: 0,
+      churnRate: 0
+    };
+
+    const categoryDistribution = {
+      Advocate: 0,
+      'All Star': 0,
+      Average: 0,
+      'At Risk': 0
+    };
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const dataDir = path.join(__dirname, 'data');
+    const csvPath = path.join(dataDir, 'latest.csv');
+
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir);
+    }
+
+    if (!fs.existsSync(csvPath)) {
+      console.log('CSV file not found');
+      return res.status(404).json({ error: 'No data available. Please upload a CSV file.' });
+    }
+
+    console.log('CSV file found, starting to read...');
     await new Promise((resolve, reject) => {
       fs.createReadStream(csvPath)
         .pipe(csv())
