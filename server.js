@@ -6,9 +6,15 @@ const app = express();
 
 // CORS configuration
 app.use(cors({
-  origin: ['https://my-web-app-dun-iota.vercel.app', 'http://localhost:3002'],
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type']
+  origin: [
+    'https://my-web-app-dun-iota.vercel.app',
+    'https://my-web-app-dun-iota.vercel.app/',
+    'http://localhost:3002',
+    'http://localhost:5173'
+  ],
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: true
 }));
 
 // Basic memory storage
