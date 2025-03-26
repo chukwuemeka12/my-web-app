@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Button, Box, Alert, CircularProgress } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import axios from 'axios';
+import { API_URL } from '../config';
 
 interface Props {
   onUploadSuccess: () => void;
@@ -40,12 +41,13 @@ const FileUpload = ({ onUploadSuccess }: Props) => {
     formData.append('file', selectedFile);
 
     try {
-      await axios.post('/api/upload', formData, {
+      const response = await axios.post(`${API_URL}/api/upload`, formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
       });
 
+      console.log('Upload response:', response.data);
       setSuccess(true);
       setSelectedFile(null);
       onUploadSuccess();
